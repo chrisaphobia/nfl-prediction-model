@@ -2,6 +2,8 @@
 
 Predicts the chance that the home team wins an NFL game, and scores those predictions honestly: every test season is one the model never trained on, and every result is compared against the betting favorite and a self-computed Elo rating.
 
+**New to this? Start with [EXPLAINED.md](EXPLAINED.md)**, a plain-English guide to what every number and term means.
+
 ## Live 2026 picks
 
 The model makes a pick for every 2026 game before kickoff, including the playoffs, and grades itself against the betting favorite and Elo as results come in. See the running scorecard: [`picks/2026/scorecard.md`](picks/2026/scorecard.md). Picks are logged in [`picks/2026/picks.csv`](picks/2026/picks.csv) and never edited, so the git history shows each one was made in advance.
