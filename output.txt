@@ -1,0 +1,40 @@
+============================================================
+NFL GAME PREDICTION MODEL — SUMMARY
+============================================================
+
+Trained on 2467 games (2016-2024), then tested on all
+284 games of the 2025 season, which it never saw.
+
+RESULT: It picked the winner in 66.2% of 2025 games.
+Run `python src/evaluate.py` for Brier score and the benchmark comparison.
+
+------------------------------------------------------------
+A FEW EXAMPLE PREDICTIONS
+------------------------------------------------------------
+
+GB @ CHI (Season 2025, Week 16)
+  Model predicted: CHI would win (53% chance for CHI)
+  What actually happened: CHI won
+  Prediction was: correct
+
+MIN @ GB (Season 2025, Week 12)
+  Model predicted: GB would win (72% chance for GB)
+  What actually happened: GB won
+  Prediction was: correct
+
+DET @ CHI (Season 2025, Week 18)
+  Model predicted: CHI would win (60% chance for CHI)
+  What actually happened: DET won
+  Prediction was: incorrect
+
+WAS @ MIA (Season 2025, Week 11)
+  Model predicted: MIA would win (57% chance for MIA)
+  What actually happened: MIA won
+  Prediction was: correct
+
+CIN @ GB (Season 2025, Week 6)
+  Model predicted: GB would win (86% chance for GB)
+  What actually happened: GB won
+  Prediction was: correct
+
+============================================================

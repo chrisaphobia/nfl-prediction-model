@@ -1,76 +1,104 @@
-import nfl_data_py as nfl
+"""Download NFL schedules with nflreadpy and build one row of pre-game features per game.
+
+Every feature uses only information available before kickoff:
+- rolling stats are shifted by one game, so a game never sees its own result
+- carryover stats come from the previous season
+- Elo is recorded before each game's update
+
+Run from the repo root:  python src/data_prep.py
+"""
+from math import erf, sqrt
+
+import nflreadpy as nfl
 import pandas as pd
 
-years = [2022, 2023, 2024, 2025]
-games = nfl.import_schedules(years)
-games = games.dropna(subset=['home_score', 'away_score'])
-games['home_win'] = (games['home_score'] > games['away_score']).astype(int)
-games['gameday'] = pd.to_datetime(games['gameday'])
-games = games.sort_values('gameday').reset_index(drop=True)
+from elo import add_elo
 
-# Build a "team-game" table: one row per team per game
-home = games[['game_id', 'gameday', 'season', 'home_team', 'home_score', 'away_score']].copy()
-home.columns = ['game_id', 'gameday', 'season', 'team', 'points_for', 'points_against']
-home['win'] = (home['points_for'] > home['points_against']).astype(int)
+FIRST_SEASON = 2015
+LAST_SEASON = 2025  # last completed season; 2026 is used for live weekly picks
 
-away = games[['game_id', 'gameday', 'season', 'away_team', 'away_score', 'home_score']].copy()
-away.columns = ['game_id', 'gameday', 'season', 'team', 'points_for', 'points_against']
-away['win'] = (away['points_for'] > away['points_against']).astype(int)
+# Franchises that moved: use one code per franchise so Elo and carryover follow the team
+RELOCATIONS = {'OAK': 'LV', 'SD': 'LAC', 'STL': 'LA'}
 
-team_games = pd.concat([home, away]).sort_values(['team', 'gameday']).reset_index(drop=True)
 
-# Rolling stats WITHIN a season only (reset each season by grouping on team + season)
-team_games['point_diff'] = team_games['points_for'] - team_games['points_against']
+def american_to_prob(ml):
+    """Implied probability from an American moneyline (includes the bookmaker's margin)."""
+    return (100 / (ml + 100)).where(ml > 0, -ml / (-ml + 100))
 
-team_games['rolling_win_pct'] = team_games.groupby(['team', 'season'])['win'].transform(
-    lambda x: x.shift(1).rolling(3, min_periods=1).mean()
-)
-team_games['rolling_point_diff'] = team_games.groupby(['team', 'season'])['point_diff'].transform(
-    lambda x: x.shift(1).rolling(3, min_periods=1).mean()
-)
 
-# Calculate each team's FINAL stats at the end of each season (for carryover)
-season_end_stats = team_games.groupby(['team', 'season']).agg(
-    final_win_pct=('win', 'mean'),
-    final_point_diff=('point_diff', 'mean')
-).reset_index()
+def load_games(first=FIRST_SEASON, last=LAST_SEASON):
+    games = nfl.load_schedules(list(range(first, last + 1))).to_pandas()
+    for col in ['home_team', 'away_team']:
+        games[col] = games[col].replace(RELOCATIONS)
+    games['gameday'] = pd.to_datetime(games['gameday'])
+    return games.sort_values(['gameday', 'game_id']).reset_index(drop=True)
 
-# Shift season forward by 1, so "2022 final stats" become "2023 carryover stats"
-season_end_stats['season'] = season_end_stats['season'] + 1
-season_end_stats = season_end_stats.rename(
-    columns={'final_win_pct': 'carryover_win_pct', 'final_point_diff': 'carryover_point_diff'})
 
-# Merge carryover stats onto team_games
-team_games = team_games.merge(season_end_stats, on=['team', 'season'], how='left')
+def add_rolling_features(games):
+    """3-game rolling win% and point differential within a season, with last-season carryover."""
+    played = games.dropna(subset=['home_score', 'away_score'])
+    cols = ['game_id', 'gameday', 'season']
+    home = played[cols + ['home_team', 'home_score', 'away_score']].copy()
+    home.columns = cols + ['team', 'points_for', 'points_against']
+    away = played[cols + ['away_team', 'away_score', 'home_score']].copy()
+    away.columns = cols + ['team', 'points_for', 'points_against']
 
-# Fill in missing rolling stats (early season games) using carryover stats
-team_games['rolling_win_pct'] = team_games['rolling_win_pct'].fillna(team_games['carryover_win_pct'])
-team_games['rolling_point_diff'] = team_games['rolling_point_diff'].fillna(team_games['carryover_point_diff'])
+    tg = pd.concat([home, away]).sort_values(['team', 'gameday']).reset_index(drop=True)
+    tg['win'] = (tg['points_for'] > tg['points_against']).astype(float)
+    tg.loc[tg['points_for'] == tg['points_against'], 'win'] = 0.5
+    tg['point_diff'] = tg['points_for'] - tg['points_against']
 
-# If STILL missing (team's very first season in our data, no prior season to carry over), use 0.5 / 0
-team_games['rolling_win_pct'] = team_games['rolling_win_pct'].fillna(0.5)
-team_games['rolling_point_diff'] = team_games['rolling_point_diff'].fillna(0)
+    by_team_season = tg.groupby(['team', 'season'])
+    tg['rolling_win_pct'] = by_team_season['win'].transform(lambda x: x.shift(1).rolling(3, min_periods=1).mean())
+    tg['rolling_point_diff'] = by_team_season['point_diff'].transform(lambda x: x.shift(1).rolling(3, min_periods=1).mean())
 
-print("Teams found:", sorted(team_games['team'].unique()))
-print("Number of teams:", team_games['team'].nunique())
+    # Last season's final averages become this season's starting point
+    carry = by_team_season.agg(carryover_win_pct=('win', 'mean'),
+                               carryover_point_diff=('point_diff', 'mean')).reset_index()
+    carry['season'] += 1
+    tg = tg.merge(carry, on=['team', 'season'], how='left')
+    tg['rolling_win_pct'] = tg['rolling_win_pct'].fillna(tg['carryover_win_pct']).fillna(0.5)
+    tg['rolling_point_diff'] = tg['rolling_point_diff'].fillna(tg['carryover_point_diff']).fillna(0)
 
-# Merge these rolling stats back onto the original home/away game rows
-home_stats = team_games[['game_id', 'team', 'rolling_win_pct', 'rolling_point_diff']].rename(
-    columns={'team': 'home_team', 'rolling_win_pct': 'home_rolling_win_pct', 'rolling_point_diff': 'home_rolling_point_diff'})
-away_stats = team_games[['game_id', 'team', 'rolling_win_pct', 'rolling_point_diff']].rename(
-    columns={'team': 'away_team', 'rolling_win_pct': 'away_rolling_win_pct', 'rolling_point_diff': 'away_rolling_point_diff'})
+    stats = tg[['game_id', 'team', 'rolling_win_pct', 'rolling_point_diff']]
+    for side in ['home', 'away']:
+        renamed = stats.rename(columns={'team': f'{side}_team',
+                                        'rolling_win_pct': f'{side}_rolling_win_pct',
+                                        'rolling_point_diff': f'{side}_rolling_point_diff'})
+        games = games.merge(renamed, on=['game_id', f'{side}_team'], how='left')
+    return games
 
-games = games.merge(home_stats, on=['game_id', 'home_team'], how='left')
-games = games.merge(away_stats, on=['game_id', 'away_team'], how='left')
 
-keep_cols = ['season', 'week', 'home_team', 'away_team', 'home_score', 'away_score', 
-             'home_win', 'div_game', 'home_rest', 'away_rest', 'spread_line', 
-             'home_moneyline', 'away_moneyline', 'home_rolling_win_pct', 
-             'away_rolling_win_pct', 'home_rolling_point_diff', 'away_rolling_point_diff']
-games = games[keep_cols]
+def add_market_features(games):
+    """No-vig win probability for the home team from the moneylines (spread as a fallback)."""
+    home_imp = american_to_prob(games['home_moneyline'])
+    away_imp = american_to_prob(games['away_moneyline'])
+    market = home_imp / (home_imp + away_imp)
+    # Rare games with no moneyline: approximate from the spread (about 13.5 pts per std. dev.)
+    from_spread = games['spread_line'].apply(lambda s: 0.5 * (1 + erf(s / (13.5 * sqrt(2)))) if pd.notna(s) else None)
+    games['market_home_prob'] = market.fillna(from_spread)
+    return games
 
-print(games.shape)
-print(games[games['week'] == 1].head(10))  # check Week 1 games specifically — this is where carryover matters most
 
-games.to_csv('data/processed_games.csv', index=False)
-print("Saved to data/processed_games.csv")
+def build(first=FIRST_SEASON, last=LAST_SEASON):
+    games = load_games(first, last)
+    games = add_elo(games)
+    games = add_rolling_features(games)
+    games = add_market_features(games)
+    games['home_win'] = (games['home_score'] > games['away_score']).astype(int)
+    games['is_tie'] = (games['home_score'] == games['away_score']).astype(int)
+    games['playoff'] = (games['game_type'] != 'REG').astype(int)
+    games['neutral_site'] = (games['location'] == 'Neutral').astype(int)
+    keep = ['game_id', 'season', 'week', 'game_type', 'gameday', 'home_team', 'away_team',
+            'home_score', 'away_score', 'home_win', 'is_tie', 'playoff', 'neutral_site',
+            'div_game', 'home_rest', 'away_rest', 'spread_line', 'home_moneyline', 'away_moneyline',
+            'market_home_prob', 'home_elo', 'away_elo', 'elo_diff', 'elo_home_prob',
+            'home_rolling_win_pct', 'away_rolling_win_pct',
+            'home_rolling_point_diff', 'away_rolling_point_diff']
+    return games[keep]
+
+
+if __name__ == '__main__':
+    games = build()
+    games.to_csv('data/processed_games.csv', index=False)
+    print(f"Saved {len(games)} games ({games['season'].min()}-{games['season'].max()}) to data/processed_games.csv")
