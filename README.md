@@ -2,6 +2,10 @@
 
 Predicts the chance that the home team wins an NFL game, and scores those predictions honestly: every test season is one the model never trained on, and every result is compared against the betting favorite and a self-computed Elo rating.
 
+## Live 2026 picks
+
+The model makes a pick for every 2026 game before kickoff, including the playoffs, and grades itself against the betting favorite and Elo as results come in. See the running scorecard: [`picks/2026/scorecard.md`](picks/2026/scorecard.md). Picks are logged in [`picks/2026/picks.csv`](picks/2026/picks.csv) and never edited, so the git history shows each one was made in advance.
+
 ## Results
 
 **Held-out 2025 season** (trained on 2016–2024, tested on all 284 games of 2025 including playoffs):
@@ -62,10 +66,10 @@ pip install -r requirements.txt
 python src/data_prep.py   # downloads schedules and play-by-play, writes data/processed_games.csv
 python src/evaluate.py    # writes results/metrics.md
 python src/model.py       # plain-language summary and example predictions
+python src/picks.py       # new picks for upcoming games + updated 2026 scorecard
 ```
 
 ## Next steps
 
 - Weight EPA toward recent games and adjust it for opponent strength, instead of a flat season-to-date average.
 - Add quarterback changes and injuries, which Elo and season averages miss but the betting line captures.
-- Post weekly picks for the 2026 season with a running scorecard through the playoffs.

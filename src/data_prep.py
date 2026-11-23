@@ -38,17 +38,22 @@ def load_games(first=FIRST_SEASON, last=LAST_SEASON):
 
 
 def add_rolling_features(games):
-    """3-game rolling win% and point differential within a season, with last-season carryover."""
-    played = games.dropna(subset=['home_score', 'away_score'])
+    """3-game rolling win% and point differential within a season, with last-season carryover.
+
+    Unplayed games are kept (with no result) so the next game on the schedule
+    gets features built from every game played before it.
+    """
     cols = ['game_id', 'gameday', 'season']
-    home = played[cols + ['home_team', 'home_score', 'away_score']].copy()
+    home = games[cols + ['home_team', 'home_score', 'away_score']].copy()
     home.columns = cols + ['team', 'points_for', 'points_against']
-    away = played[cols + ['away_team', 'away_score', 'home_score']].copy()
+    away = games[cols + ['away_team', 'away_score', 'home_score']].copy()
     away.columns = cols + ['team', 'points_for', 'points_against']
 
     tg = pd.concat([home, away]).sort_values(['team', 'gameday']).reset_index(drop=True)
+    played = tg['points_for'].notna() & tg['points_against'].notna()
     tg['win'] = (tg['points_for'] > tg['points_against']).astype(float)
     tg.loc[tg['points_for'] == tg['points_against'], 'win'] = 0.5
+    tg.loc[~played, 'win'] = None
     tg['point_diff'] = tg['points_for'] - tg['points_against']
 
     by_team_season = tg.groupby(['team', 'season'])
@@ -93,7 +98,11 @@ def team_game_epa(first, last):
 def add_epa_features(games, first, last):
     """Pre-game season-to-date EPA/play and success rate, shrunk toward last season's averages."""
     stats = ['off_epa', 'def_epa', 'off_sr', 'def_sr']
-    tg = team_game_epa(first, last).merge(games[['game_id', 'gameday']], on='game_id')
+    epa = team_game_epa(first, last)
+    # One row per team per scheduled game; unplayed games have no stats yet
+    sched = pd.concat([games[['game_id', 'gameday', 'season', f'{side}_team']].rename(columns={f'{side}_team': 'team'})
+                       for side in ['home', 'away']])
+    tg = sched.merge(epa.drop(columns='season'), on=['game_id', 'team'], how='left')
     tg = tg.sort_values(['team', 'gameday']).reset_index(drop=True)
 
     carry = tg.groupby(['team', 'season'])[stats].mean().reset_index()
@@ -103,10 +112,10 @@ def add_epa_features(games, first, last):
     league = tg[stats].mean()
 
     by = tg.groupby(['team', 'season'])
-    n_before = by.cumcount()
     for s in stats:
         prior = tg[f'{s}_prior'].fillna(league[s])
-        sum_before = by[s].transform(lambda x: x.shift(1).cumsum()).fillna(0)
+        sum_before = by[s].transform(lambda x: x.fillna(0).cumsum().shift(1, fill_value=0))
+        n_before = by[s].transform(lambda x: x.notna().astype(int).cumsum().shift(1, fill_value=0))
         tg[s] = (sum_before + PRIOR_GAMES * prior) / (n_before + PRIOR_GAMES)
 
     for side in ['home', 'away']:
