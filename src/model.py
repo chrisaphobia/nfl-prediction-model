@@ -1,68 +1,68 @@
+"""Logistic regression model for NFL home-team win probability.
+
+Training always uses seasons strictly before the season being predicted,
+so the model never sees the games it is tested on.
+
+Run from the repo root:  python src/model.py
+"""
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-games = pd.read_csv('data/processed_games.csv')
+TEAM_FEATURES = ['home_rest', 'away_rest', 'div_game', 'neutral_site', 'playoff', 'elo_diff',
+                 'home_rolling_win_pct', 'away_rolling_win_pct',
+                 'home_rolling_point_diff', 'away_rolling_point_diff']
+# The betting line is a strong signal; keep a version without it to show what the model adds on its own
+MARKET_FEATURES = TEAM_FEATURES + ['spread_line']
 
-features = ['home_rest', 'away_rest', 'spread_line', 'div_game',
-            'home_rolling_win_pct', 'away_rolling_win_pct',
-            'home_rolling_point_diff', 'away_rolling_point_diff']
+TRAIN_START = 2016  # 2015 is a warm-up season for Elo and carryover stats
+TEST_SEASON = 2025
 
-games = games.dropna(subset=features).reset_index(drop=True)
 
-X = games[features]
-y = games['home_win']
+def load(path='data/processed_games.csv'):
+    games = pd.read_csv(path)
+    # Ties are neither a home win nor a loss; leave them out of training and scoring
+    return games[games['is_tie'] == 0].reset_index(drop=True)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
-# Keep the matching game info (teams, week) for the test set so we can show real examples
-test_games = games.loc[X_test.index].copy()
 
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+def fit(train, features):
+    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+    model.fit(train[features], train['home_win'])
+    return model
 
-model = LogisticRegression()
-model.fit(X_train_scaled, y_train)
 
-predictions = model.predict(X_test_scaled)
-probabilities = model.predict_proba(X_test_scaled)[:, 1]  # probability home team wins
-accuracy = accuracy_score(y_test, predictions)
+def split(games, test_season, train_start=TRAIN_START):
+    train = games[(games['season'] >= train_start) & (games['season'] < test_season)]
+    test = games[games['season'] == test_season]
+    return train, test
 
-test_games['predicted_home_win'] = predictions
-test_games['home_win_probability'] = probabilities
-test_games['actual_home_win'] = y_test.values
-test_games['correct'] = (test_games['predicted_home_win'] == test_games['actual_home_win'])
 
-# ---- PLAIN-LANGUAGE SUMMARY ----
-print("=" * 60)
-print("NFL GAME PREDICTION MODEL — SUMMARY")
-print("=" * 60)
-print(f"\nThis model looked at {len(X_train)} past NFL games and learned")
-print(f"patterns that predict who wins. It was then tested on")
-print(f"{len(X_test)} new games it had never seen before.\n")
-print(f"RESULT: It correctly predicted the winner in {accuracy:.1%} of games.")
-print(f"(For comparison, always guessing 'home team wins' gets about 56%.)\n")
+if __name__ == '__main__':
+    games = load()
+    train, test = split(games, TEST_SEASON)
+    model = fit(train, MARKET_FEATURES)
+    test = test.copy()
+    test['home_win_probability'] = model.predict_proba(test[MARKET_FEATURES])[:, 1]
+    test['correct'] = (test['home_win_probability'] > 0.5).astype(int) == test['home_win']
 
-print("-" * 60)
-print("A FEW EXAMPLE PREDICTIONS")
-print("-" * 60)
-sample = test_games.sample(5, random_state=1)
-for _, row in sample.iterrows():
-    home = row['home_team']
-    away = row['away_team']
-    prob = row['home_win_probability']
-    predicted_winner = home if row['predicted_home_win'] == 1 else away
-    actual_winner = home if row['actual_home_win'] == 1 else away
-    result_icon = "correct" if row['correct'] else "incorrect"
+    print('=' * 60)
+    print('NFL GAME PREDICTION MODEL — SUMMARY')
+    print('=' * 60)
+    print(f"\nTrained on {len(train)} games ({TRAIN_START}-{TEST_SEASON - 1}), then tested on all")
+    print(f"{len(test)} games of the {TEST_SEASON} season, which it never saw.\n")
+    print(f"RESULT: It picked the winner in {test['correct'].mean():.1%} of {TEST_SEASON} games.")
+    print('Run `python src/evaluate.py` for Brier score and the benchmark comparison.\n')
 
-    print(f"\n{away} @ {home} (Season {row['season']}, Week {row['week']})")
-    print(f"  Model predicted: {predicted_winner} would win "
-          f"({prob:.0%} confidence in {home})")
-    print(f"  What actually happened: {actual_winner} won")
-    print(f"  Prediction was: {result_icon}")
-
-print("\n" + "=" * 60)
+    print('-' * 60)
+    print('A FEW EXAMPLE PREDICTIONS')
+    print('-' * 60)
+    for _, row in test.sample(5, random_state=1).iterrows():
+        home, away, prob = row['home_team'], row['away_team'], row['home_win_probability']
+        predicted = home if prob > 0.5 else away
+        actual = home if row['home_win'] == 1 else away
+        print(f"\n{away} @ {home} (Season {row['season']}, Week {row['week']})")
+        print(f"  Model predicted: {predicted} would win ({prob:.0%} chance for {home})")
+        print(f"  What actually happened: {actual} won")
+        print(f"  Prediction was: {'correct' if row['correct'] else 'incorrect'}")
+    print('\n' + '=' * 60)
