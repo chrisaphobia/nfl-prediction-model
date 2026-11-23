@@ -15,7 +15,7 @@ import os
 import pandas as pd
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 
-from model import MARKET_FEATURES, TEAM_FEATURES, TEST_SEASON, TRAIN_START, fit, load, split
+from model import EPA_FEATURES, EPA_MARKET_FEATURES, MARKET_FEATURES, TEAM_FEATURES, TEST_SEASON, TRAIN_START, fit, load, split
 
 WALK_FORWARD_SEASONS = range(2018, 2026)
 
@@ -23,12 +23,20 @@ WALK_FORWARD_SEASONS = range(2018, 2026)
 def predictions(games, test_season):
     """Home-win probabilities for every game in test_season, from each method."""
     train, test = split(games, test_season)
+
+    def model_probs(features, kind='logistic'):
+        return pd.Series(fit(train, features, kind).predict_proba(test[features])[:, 1], index=test.index)
+
     return test, {
         'Always pick home team': pd.Series(train['home_win'].mean(), index=test.index),
         'Betting favorite': test['market_home_prob'],
         'Elo (self-computed)': test['elo_home_prob'],
-        'Logistic, no betting line': pd.Series(fit(train, TEAM_FEATURES).predict_proba(test[TEAM_FEATURES])[:, 1], index=test.index),
-        'Logistic, with spread': pd.Series(fit(train, MARKET_FEATURES).predict_proba(test[MARKET_FEATURES])[:, 1], index=test.index),
+        'Logistic, no betting line': model_probs(TEAM_FEATURES),
+        'Logistic + EPA, no betting line': model_probs(EPA_FEATURES),
+        'Gradient boosting + EPA, no betting line': model_probs(EPA_FEATURES, 'boosting'),
+        'Logistic, with spread': model_probs(MARKET_FEATURES),
+        'Logistic + EPA, with spread': model_probs(EPA_MARKET_FEATURES),
+        'Gradient boosting + EPA, with spread': model_probs(EPA_MARKET_FEATURES, 'boosting'),
     }
 
 

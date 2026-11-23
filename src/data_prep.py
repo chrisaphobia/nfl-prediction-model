@@ -4,6 +4,8 @@ Every feature uses only information available before kickoff:
 - rolling stats are shifted by one game, so a game never sees its own result
 - carryover stats come from the previous season
 - Elo is recorded before each game's update
+- EPA and success-rate averages use only a team's earlier games that season,
+  blended with last season's averages while the sample is small
 
 Run from the repo root:  python src/data_prep.py
 """
@@ -11,6 +13,7 @@ from math import erf, sqrt
 
 import nflreadpy as nfl
 import pandas as pd
+import polars as pl
 
 from elo import add_elo
 
@@ -69,6 +72,52 @@ def add_rolling_features(games):
     return games
 
 
+PRIOR_GAMES = 4  # last season's average counts like this many games of this season
+
+
+def team_game_epa(first, last):
+    """Offensive and defensive EPA/play and success rate for every team in every game."""
+    pbp = nfl.load_pbp(list(range(first, last + 1))).select(
+        ['game_id', 'season', 'posteam', 'defteam', 'epa', 'success', 'pass', 'rush'])
+    plays = pbp.filter(((pl.col('pass') == 1) | (pl.col('rush') == 1)) & pl.col('epa').is_not_null()
+                       & pl.col('posteam').is_not_null())
+    off = plays.group_by(['game_id', 'season', 'posteam']).agg(
+        off_epa=pl.col('epa').mean(), off_sr=pl.col('success').mean()).rename({'posteam': 'team'})
+    deff = plays.group_by(['game_id', 'season', 'defteam']).agg(
+        def_epa=pl.col('epa').mean(), def_sr=pl.col('success').mean()).rename({'defteam': 'team'})
+    tg = off.join(deff, on=['game_id', 'season', 'team']).to_pandas()
+    tg['team'] = tg['team'].replace(RELOCATIONS)
+    return tg
+
+
+def add_epa_features(games, first, last):
+    """Pre-game season-to-date EPA/play and success rate, shrunk toward last season's averages."""
+    stats = ['off_epa', 'def_epa', 'off_sr', 'def_sr']
+    tg = team_game_epa(first, last).merge(games[['game_id', 'gameday']], on='game_id')
+    tg = tg.sort_values(['team', 'gameday']).reset_index(drop=True)
+
+    carry = tg.groupby(['team', 'season'])[stats].mean().reset_index()
+    carry['season'] += 1
+    carry = carry.rename(columns={s: f'{s}_prior' for s in stats})
+    tg = tg.merge(carry, on=['team', 'season'], how='left')
+    league = tg[stats].mean()
+
+    by = tg.groupby(['team', 'season'])
+    n_before = by.cumcount()
+    for s in stats:
+        prior = tg[f'{s}_prior'].fillna(league[s])
+        sum_before = by[s].transform(lambda x: x.shift(1).cumsum()).fillna(0)
+        tg[s] = (sum_before + PRIOR_GAMES * prior) / (n_before + PRIOR_GAMES)
+
+    for side in ['home', 'away']:
+        renamed = tg[['game_id', 'team'] + stats].rename(
+            columns={'team': f'{side}_team', **{s: f'{side}_{s}' for s in stats}})
+        games = games.merge(renamed, on=['game_id', f'{side}_team'], how='left')
+    # One number for "whose play-by-play profile is better": (home off - home def) - (away off - away def)
+    games['epa_net_diff'] = (games['home_off_epa'] - games['home_def_epa']) - (games['away_off_epa'] - games['away_def_epa'])
+    return games
+
+
 def add_market_features(games):
     """No-vig win probability for the home team from the moneylines (spread as a fallback)."""
     home_imp = american_to_prob(games['home_moneyline'])
@@ -84,6 +133,7 @@ def build(first=FIRST_SEASON, last=LAST_SEASON):
     games = load_games(first, last)
     games = add_elo(games)
     games = add_rolling_features(games)
+    games = add_epa_features(games, first, last)
     games = add_market_features(games)
     games['home_win'] = (games['home_score'] > games['away_score']).astype(int)
     games['is_tie'] = (games['home_score'] == games['away_score']).astype(int)
@@ -94,7 +144,9 @@ def build(first=FIRST_SEASON, last=LAST_SEASON):
             'div_game', 'home_rest', 'away_rest', 'spread_line', 'home_moneyline', 'away_moneyline',
             'market_home_prob', 'home_elo', 'away_elo', 'elo_diff', 'elo_home_prob',
             'home_rolling_win_pct', 'away_rolling_win_pct',
-            'home_rolling_point_diff', 'away_rolling_point_diff']
+            'home_rolling_point_diff', 'away_rolling_point_diff',
+            'home_off_epa', 'home_def_epa', 'away_off_epa', 'away_def_epa',
+            'home_off_sr', 'home_def_sr', 'away_off_sr', 'away_def_sr', 'epa_net_diff']
     return games[keep]
 
 
