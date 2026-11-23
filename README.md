@@ -63,6 +63,25 @@ Brier score is the mean squared error of the win probability (lower is better). 
 
 ## Run it
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/chrisaphobia/nfl-prediction-model?quickstart=1)
+
+**Easiest: in your browser, with nothing to install**
+1. Click the **Open in GitHub Codespaces** button above, then **Create codespace**. Setup installs everything automatically (about a minute).
+2. When the terminal at the bottom is ready, type `bash run_all.sh` and press Enter.
+3. It downloads the data, scores every model, and prints a summary. The full results table is saved to `results/metrics.md`.
+
+Codespaces is free for a limited number of hours each month. When you're done, stop it from [github.com/codespaces](https://github.com/codespaces) so it doesn't use up those hours.
+
+**On your own computer** (needs Python 3.10 or newer):
+
+```bash
+git clone https://github.com/chrisaphobia/nfl-prediction-model
+cd nfl-prediction-model
+bash run_all.sh
+```
+
+**One step at a time:**
+
 ```bash
 pip install -r requirements.txt
 python src/data_prep.py   # downloads schedules and play-by-play, writes data/processed_games.csv
@@ -70,6 +89,8 @@ python src/evaluate.py    # writes results/metrics.md
 python src/model.py       # plain-language summary and example predictions
 python src/picks.py       # new picks for upcoming games + updated 2026 scorecard
 ```
+
+You don't need to run `picks.py` yourself. A scheduled job runs it every morning and saves the new picks here.
 
 ## Next steps
 
