@@ -1,6 +1,6 @@
 # 2026 live picks scorecard
 
-Updated Tuesday, November 24, 2026 at 7:50 AM ET. Picks are made before kickoff and never edited (see the git history of `picks.csv`). The model is logistic regression without the betting line; the favorite uses the closing moneyline. Ties are not graded.
+Updated Wednesday, November 25, 2026 at 7:50 AM ET. Picks are made before kickoff and never edited (see the git history of `picks.csv`). The model is logistic regression without the betting line; the favorite uses the closing moneyline. Ties are not graded.
 
 ## Season to date
 
